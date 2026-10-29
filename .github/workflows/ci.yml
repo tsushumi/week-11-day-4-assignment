@@ -1,0 +1,54 @@
+name: CI
+
+# Runs on every push to any branch: lint, then tests with coverage.
+# The matrix runs 4 parallel jobs (Node 18/20 x ubuntu/macOS).
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      # Let every combination finish so one failure doesn't hide the others.
+      fail-fast: false
+      matrix:
+        node-version: [18, 20]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      # A non-zero exit (failing test OR coverage below threshold) fails the workflow.
+      - name: Run tests with coverage
+        run: npm run test:coverage
+        env:
+          NODE_ENV: test
+          JWT_SECRET: ci-test-secret
+
+      # if: always() uploads results even when tests fail. Artifact names must be
+      # unique per matrix job, otherwise upload-artifact@v4 errors on a name clash.
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-node${{ matrix.node-version }}
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore

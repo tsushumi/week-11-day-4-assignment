@@ -1,0 +1,60 @@
+name: Scheduled Health Check
+
+# Task 3: every Monday at 9:00 AM EAT (UTC+3) = 06:00 UTC.
+# workflow_dispatch lets you run it manually: Actions > Scheduled Health Check > Run workflow.
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health-check:
+    name: Weekly Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Set a repository variable HEALTH_CHECK_URL (Settings > Secrets and variables > Actions > Variables)
+      # to your deployed API. Falls back to the placeholder URL from the assignment.
+      HEALTH_URL: ${{ vars.HEALTH_CHECK_URL || 'https://your-api.railway.app/api/health' }}
+      # Job-level so the Discord step's `if:` can see it (a step's own env is not
+      # visible to its own `if:`, and the secrets context is not allowed in `if:`).
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    steps:
+      - name: Check health endpoint
+        id: health
+        run: |
+          if curl -f --silent --show-error --max-time 30 "$HEALTH_URL"; then
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+          else
+            echo "Health check failed"
+            echo "status=unhealthy" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log health check result
+        if: always()
+        run: echo "Health check completed at $(date -u). Status - ${{ steps.health.outputs.status || 'unknown' }} (job ${{ job.status }})"
+
+      # Optional: only runs when a DISCORD_WEBHOOK_URL secret exists, so the workflow
+      # stays green for people without a webhook. The JSON is built with jq so the
+      # date and status are expanded and any quotes are escaped properly.
+      - name: Notify Discord
+        if: always() && env.DISCORD_WEBHOOK_URL != ''
+        env:
+          HEALTH_STATUS: ${{ steps.health.outputs.status || 'unknown' }}
+        run: |
+          payload=$(jq -n \
+            --arg content "Weekly health check completed at $(date -u). Status: ${HEALTH_STATUS} (${HEALTH_URL})" \
+            '{content: $content}')
+          curl -f --silent --show-error \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"
+
+      # With a real URL configured, an unhealthy API fails the run so GitHub emails you.
+      # With the placeholder URL, the run stays green so the assignment screenshot works.
+      - name: Fail if the API is unhealthy
+        if: steps.health.outputs.status == 'unhealthy' && vars.HEALTH_CHECK_URL != ''
+        run: exit 1

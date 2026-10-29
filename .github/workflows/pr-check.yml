@@ -1,0 +1,65 @@
+name: PR Check
+
+# Runs only on pull requests that target main.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    # Only runs if the lint job succeeds.
+    needs: lint
+    timeout-minutes: 10
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-test-secret
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fails the job on any failing test or when coverage drops below the thresholds.
+      - name: Run tests with coverage
+        run: npm run test:coverage
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-test-results
+          path: coverage/
+          retention-days: 7
+          if-no-files-found: ignore

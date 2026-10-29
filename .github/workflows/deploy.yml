@@ -1,0 +1,154 @@
+name: Deploy
+
+# Runs when code lands on main (a merged PR or a direct push).
+# Chain: test -> deploy -> notify. `deploy` has `needs: test`, so it is skipped if tests fail.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Never run two deployments at once; let a running one finish rather than cancelling it halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+        env:
+          NODE_ENV: test
+          JWT_SECRET: ci-test-secret
+
+      - name: Check that the frontend builds
+        run: npm run build
+
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    # The gate: if `test` fails, this job (and its steps) never run.
+    needs: test
+    timeout-minutes: 10
+    env:
+      # Optional repository variables (Settings > Secrets and variables > Actions > Variables).
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+      API_URL: ${{ vars.API_URL }}
+      # Untrusted text goes through env, never straight into the script (shell injection).
+      COMMIT_SHA: ${{ github.sha }}
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Vercel and Railway deploy through their GitHub integrations when main is pushed.
+      # This job records that tests passed first. See DEPLOYMENT.md for how to make the
+      # platforms wait for this workflow (Railway "Wait for CI") or deploy from here instead.
+      - name: Deploy to Vercel and Railway
+        run: echo "Vercel and Railway auto-deploy via their GitHub integrations -- deployment triggered by push to main"
+
+      - name: Verify deployment
+        run: |
+          echo "Deployment triggered for commit ${COMMIT_SHA}"
+          echo "Commit message: ${COMMIT_MESSAGE}"
+          echo "Branch: ${BRANCH}"
+
+      # Only runs when the API_URL variable is set. Retries for ~2 minutes because Railway
+      # takes a moment to roll out the new version after the push.
+      - name: Smoke test the API
+        if: env.API_URL != ''
+        run: |
+          curl --fail --silent --show-error \
+            --retry 8 --retry-delay 15 --retry-all-errors --max-time 20 \
+            "${API_URL%/}/api/health"
+          echo
+
+  notify:
+    name: Notify Discord
+    runs-on: ubuntu-latest
+    needs: [test, deploy]
+    # Run whether the chain succeeded, failed, or the gate skipped the deploy.
+    if: always()
+    timeout-minutes: 5
+    env:
+      # Job-level so the Discord step's `if:` can read it (secrets are not allowed in `if:`).
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      TEST_RESULT: ${{ needs.test.result }}
+      DEPLOY_RESULT: ${{ needs.deploy.result }}
+      REPOSITORY: ${{ github.repository }}
+      BRANCH: ${{ github.ref_name }}
+      COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+    steps:
+      - name: Work out deployment status
+        run: |
+          if [ "$DEPLOY_RESULT" = "success" ]; then
+            STATUS="deployed successfully"
+            COLOR=3066993
+          elif [ "$TEST_RESULT" != "success" ]; then
+            STATUS="blocked: tests failed, nothing was deployed"
+            COLOR=15158332
+          else
+            STATUS="deployment failed"
+            COLOR=15158332
+          fi
+          FIRST_LINE=$(printf '%s' "$COMMIT_MESSAGE" | head -n 1)
+          {
+            echo "STATUS=${STATUS}"
+            echo "COLOR=${COLOR}"
+            echo "COMMIT_TITLE=${FIRST_LINE}"
+            echo "TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          } >> "$GITHUB_ENV"
+
+      # Always logs, so there is visible output even without a Discord webhook.
+      - name: Log deployment notification
+        run: |
+          echo "=== DEPLOYMENT NOTIFICATION ==="
+          echo "Project: ${REPOSITORY}"
+          echo "Status: ${STATUS}"
+          echo "Commit: ${COMMIT_TITLE}"
+          echo "Branch: ${BRANCH}"
+          echo "Timestamp: ${TIMESTAMP}"
+          echo "URL: ${FRONTEND_URL:-not set (add a FRONTEND_URL repository variable)}"
+          echo "Run: ${RUN_URL}"
+          echo "==============================="
+
+      # Skipped when no DISCORD_WEBHOOK_URL secret exists, so the workflow still passes.
+      - name: Send Discord notification
+        if: env.DISCORD_WEBHOOK_URL != ''
+        run: |
+          DESCRIPTION=$(printf '**Project**: %s\n**Status**: %s\n**Commit**: %s\n**Branch**: %s\n**URL**: %s\n**Run**: %s\n**Timestamp**: %s' \
+            "$REPOSITORY" "$STATUS" "$COMMIT_TITLE" "$BRANCH" "${FRONTEND_URL:-not set}" "$RUN_URL" "$TIMESTAMP")
+
+          # jq escapes quotes/newlines in the commit message so the JSON is always valid.
+          PAYLOAD=$(jq -n \
+            --arg description "$DESCRIPTION" \
+            --argjson color "$COLOR" \
+            '{embeds: [{title: "Deployment Update", description: $description, color: $color, footer: {text: "GitHub Actions"}}]}')
+
+          curl --fail --silent --show-error \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$DISCORD_WEBHOOK_URL"

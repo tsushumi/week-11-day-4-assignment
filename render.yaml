@@ -1,0 +1,18 @@
+# Render dashboard > New > Blueprint > pick this repo. Not tested from here; check Render's current docs if a field is rejected.
+services:
+  - type: web
+    name: week-11-api
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node --import ./instrument.js server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SENTRY_DSN
+        sync: false
+      - key: FRONTEND_URL
+        sync: false

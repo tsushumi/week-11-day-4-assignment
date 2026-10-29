@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Service Status</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Service Status</h1>
+      <p class="lead"><a href="index.html">&larr; Back to the app</a></p>
+
+      <section class="card" aria-live="polite">
+        <ul id="services" class="services">
+          <li class="service-row"><span class="dot unknown"></span><span>Loading...</span></li>
+        </ul>
+        <p class="overall">Overall: <strong id="overall">Checking...</strong></p>
+        <p class="checked">Last checked: <time id="last-checked">never</time></p>
+      </section>
+    </main>
+
+    <footer>Refreshes every 30 seconds</footer>
+
+    <script src="config.js"></script>
+    <script src="status.js"></script>
+  </body>
+</html>
