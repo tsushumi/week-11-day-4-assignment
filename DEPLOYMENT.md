@@ -1,7 +1,5 @@
 # Deployment Process
 
-> Fill in the `YOUR-...` placeholders with your real URLs and add your screenshots (see [Evidence](#evidence-screenshots)).
-
 ## Frontend (Vercel)
 - **URL**: https://YOUR-APP.vercel.app
 - **Trigger**: Auto-deploys on every push to `main`
